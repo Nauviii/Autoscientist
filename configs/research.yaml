@@ -1,0 +1,24 @@
+dataset: data/telco.csv
+target: Churn
+objective: "Identifikasi pelanggan yang akan berhenti berlangganan bulan depan."
+
+budget:
+  max_experiments: 50
+  max_wall_time_min: 90
+  max_tokens: 1_500_000
+
+evaluation:
+  primary_metric: auto
+  delta_practical: 0.01
+  secondary_gates:
+    brier: 0.005
+
+constraints:
+  max_features: 200
+  max_pipeline_depth: 5
+  complexity_lambda: 0.02
+
+governance:
+  approval_mode: interactive
+
+seed: 42

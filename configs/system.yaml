@@ -1,0 +1,42 @@
+validation:
+  candidate_protocols: [[5, 1], [5, 5], [10, 3], [10, 5], [10, 10]]
+  default_k: 10
+  default_repeats: 5
+  exploration_frac: 0.15
+
+sandbox:
+  start_method: fork
+  mem_limit_mb: 2048
+  cpu_seconds: 120
+  wall_seconds: 180
+  max_repair_attempts: 2
+  import_allowlist: [pandas, numpy, sklearn, scipy, math, itertools, collections]
+
+guards:
+  row_independence_samples: 5
+  permutation_folds: 5
+  determinism_runs: 2
+
+llm:
+  propose:
+    model: claude-sonnet-5
+    temperature: 0.7
+    max_tokens: 2000
+  repair:
+    model: claude-sonnet-5
+    temperature: 0.2
+    max_tokens: 2000
+  probe:
+    model: claude-haiku-4-5-20251001
+    temperature: 0.3
+    max_tokens: 800
+
+cache:
+  mode: record
+  path: artifacts/.llm_cache
+
+modeling:
+  families: [lightgbm, xgboost, catboost]
+  n_threads: 4
+  hpo_trials: 20
+  hpo_protocol: [5, 1]

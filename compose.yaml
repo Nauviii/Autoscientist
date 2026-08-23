@@ -1,0 +1,23 @@
+services:
+  dsar:
+    build: .
+    image: dsar:local
+    volumes:
+      # Source and data are mounted so an edit does not require a rebuild.
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./scripts:/app/scripts
+      - ./configs:/app/configs
+      - ./data:/app/data:ro
+      - ./artifacts:/app/artifacts
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    working_dir: /app
+    command: ["uv", "run", "pytest", "-q"]
+
+  # Interactive shell: docker compose run --rm shell
+  shell:
+    extends: dsar
+    command: ["bash"]
+    stdin_open: true
+    tty: true

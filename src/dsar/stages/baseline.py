@@ -112,6 +112,16 @@ class BaselineOutcome:
         return {e.experiment_id: e for e in self.experiments}
 
 
+def group_series(frame: pd.DataFrame, contract: DataContract) -> pd.Series | None:
+    """The grouping column, when the contract asks for grouped resampling."""
+    column = contract.validation.group_column
+    if column is None:
+        return None
+    if column not in frame.columns:
+        raise ValueError(f"group column {column} is not present in the feature frame")
+    return frame[column]
+
+
 def _cell_transform(cells: Sequence[str], executor: Any, limits: Any):
     """Adapt the executor into the per-fold transform run_cv expects."""
 
@@ -217,7 +227,7 @@ def search_hyperparameters(
         group_column=contract.validation.group_column,
         time_column=contract.validation.time_column,
     )
-    folds = make_folds(cheap, target)
+    folds = make_folds(cheap, target, groups=group_series(frame, contract))
     metric = contract.primary_metric
     lower_is_better = metric in {"brier", "logloss", "rmse", "mae"}
 
@@ -256,7 +266,7 @@ def run_baselines(
     tune: bool = True,
 ) -> BaselineOutcome:
     """Establish the three anchors and the evidence between them."""
-    folds = make_folds(contract.validation, target)
+    folds = make_folds(contract.validation, target, groups=group_series(frame, contract))
     cells = (MINIMAL_PREPARATION,)
     transform = _cell_transform(cells, executor, limits)
 

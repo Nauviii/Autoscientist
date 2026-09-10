@@ -115,8 +115,18 @@ class ValidationSpec:
     time_column: str | None = None
 
     @property
+    def effective_repeats(self) -> int:
+        """Repeats that actually produce distinct partitions.
+
+        A forward-chaining split is fully determined by the row order, so repeating
+        it returns the same folds. Reporting the requested count instead would make
+        the power calculation claim a precision the run never had.
+        """
+        return 1 if self.kind == "time_series" else self.repeats
+
+    @property
     def n_fits(self) -> int:
-        return self.k * self.repeats
+        return self.k * self.effective_repeats
 
     @property
     def test_train_ratio(self) -> float:

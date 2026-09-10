@@ -76,18 +76,15 @@ def make_folds(
 ) -> tuple[FoldSpec, ...]:
     """Generate every fold once. Reused by every experiment in the session.
 
-    Repeats are forced to one for grouped and temporal schemes: neither admits a
-    meaningful reshuffle, so extra repeats would return identical partitions.
+    Temporal splits are never repeated, since forward chaining is fixed by the row
+    order. Grouped splits are shuffled by seed, so repeats do produce distinct
+    partitions and are honoured.
     """
     n = len(target)
     indices = np.arange(n)
     folds: list[FoldSpec] = []
 
-    repeats = validation.repeats
-    if validation.kind in ("group_kfold", "time_series"):
-        repeats = 1
-
-    for repeat in range(repeats):
+    for repeat in range(validation.effective_repeats):
         seed = validation.seed + repeat
 
         if validation.kind == "stratified_kfold":

@@ -316,3 +316,25 @@ def test_rho_calibration_needs_enough_folds() -> None:
 
 def test_selection_penalty_quantifies_the_winners_curse() -> None:
     assert selection_penalty(0.712, 0.688) == pytest.approx(0.024)
+
+
+def test_temporal_splits_report_the_folds_they_actually_produce() -> None:
+    """Forward chaining is fixed by row order, so repeating it changes nothing.
+
+    Reporting the requested repeats would make the power calculation claim a
+    precision the run never had, and would then fail the paired comparison.
+    """
+    temporal = ValidationSpec(kind="time_series", k=10, repeats=5, seed=42)
+    assert temporal.effective_repeats == 1
+    assert temporal.n_fits == 10
+
+    for kind in ("stratified_kfold", "kfold", "group_kfold"):
+        spec = ValidationSpec(kind=kind, k=10, repeats=5, seed=42)  # type: ignore[arg-type]
+        assert spec.n_fits == 50
+
+
+def test_fewer_folds_widen_the_detectable_effect() -> None:
+    """Ten fits cannot resolve what fifty can, and the profile must say so."""
+    temporal = ValidationSpec(kind="time_series", k=10, repeats=5, seed=42)
+    repeated = ValidationSpec(kind="kfold", k=10, repeats=5, seed=42)
+    assert minimum_detectable_effect(0.02, temporal) > minimum_detectable_effect(0.02, repeated)

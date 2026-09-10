@@ -10,6 +10,7 @@ from dsar.core.contracts import Severity
 from dsar.stages.eda import (
     _cramers_v,
     block_a_integrity,
+    coerce_datetime,
     classify_column,
     coerce_numeric,
     choose_metric,
@@ -271,3 +272,52 @@ def test_a_text_numeric_column_is_not_flagged_as_leakage() -> None:
         f.column == "total_charges" and f.test == "near_perfect_association"
         for f in artifact.leakage
     )
+
+
+def test_dates_stored_as_text_are_detected() -> None:
+    """CSV readers hand back dates as strings, so the temporal path needs parsing."""
+    stamps = pd.Series(pd.date_range("2024-01-01", periods=200, freq="D").astype(str))
+    assert coerce_datetime(stamps) is not None
+    assert classify_column("event_day", stamps).role == "datetime"
+
+
+def test_a_bare_number_is_not_read_as_a_date() -> None:
+    """Numeric parsing runs first, or a year column would become a timestamp."""
+    assert classify_column("year", pd.Series([2011, 2012] * 100)).role == "numeric"
+    assert coerce_datetime(pd.Series(["1.5", "2.5"] * 50)) is None
+
+
+def test_a_text_date_column_drives_temporal_validation() -> None:
+    rng = np.random.default_rng(8)
+    frame, signal = base_frame(seed=8)
+    frame["event_day"] = pd.date_range(
+        "2024-01-01", periods=len(frame), freq="h"
+    ).astype(str)
+    frame["y"] = signal + rng.normal(size=len(frame))
+
+    artifact, contract = run_eda(frame=frame, target_column="y")
+    assert contract.validation.kind == "time_series"
+    assert contract.validation.time_column == "event_day"
+    assert "event_day" not in artifact.structure.group_candidates
+
+
+def test_an_integer_row_counter_is_treated_as_an_identifier() -> None:
+    """It parses as a number, so checking type before identity would let it through."""
+    frame = binary_frame()
+    frame.insert(0, "instant", range(1, len(frame) + 1))
+    _, contract = run_eda(frame=frame, target_column="Churn")
+    assert "instant" in contract.excluded_columns
+
+
+def test_a_component_of_a_continuous_target_is_flagged() -> None:
+    """A depth-2 stump cannot express this, which is why regression gets more depth."""
+    rng = np.random.default_rng(9)
+    frame, signal = base_frame(seed=9)
+    frame = frame.drop(columns=["cat_0"])
+    noise = rng.normal(scale=0.2, size=len(frame))
+    frame["major_part"] = signal * 0.8
+    frame["target"] = frame["major_part"] + signal * 0.2 + noise
+
+    artifact, _ = run_eda(frame=frame, target_column="target")
+    flagged = {f.column for f in artifact.leakage if f.test == "single_column_power"}
+    assert "major_part" in flagged

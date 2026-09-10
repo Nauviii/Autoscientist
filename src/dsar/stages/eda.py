@@ -42,8 +42,17 @@ ID_UNIQUE_RATIO = 0.99
 MISSINGNESS_ALARM = 0.70
 HIGH_CARDINALITY = 15
 
-# Share of values that must parse as numbers before a text column is read as numeric.
+# Share of values that must parse before a text column is read as numeric or as a date.
 NUMERIC_COERCION_RATE = 0.90
+DATETIME_COERCION_RATE = 0.90
+
+# A depth-2 stump cannot express a monotone relationship, so regression needs more
+# room before its R2 says anything about how much one column explains.
+REGRESSION_TREE_DEPTH = 4
+
+# One column explaining this much of a continuous target is suspicious in the same
+# way a near-perfect classifier is.
+REGRESSION_POWER_ALARM = 0.85
 MULTICLASS_LIMIT = 20
 
 # Below this, a grouping key repeats often enough that rows within a group cannot
@@ -199,19 +208,45 @@ def coerce_numeric(series: pd.Series) -> pd.Series | None:
     return coerced if coerced.notna().mean() > NUMERIC_COERCION_RATE else None
 
 
+def coerce_datetime(series: pd.Series) -> pd.Series | None:
+    """Return the datetime reading of a text column, or None if it is not one.
+
+    CSV readers hand back dates as plain strings, so without this the temporal path
+    is unreachable on any real file: the column looks categorical and the validation
+    scheme never becomes time_series.
+    """
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return series
+    if pd.api.types.is_numeric_dtype(series):
+        return None
+    try:
+        coerced = pd.to_datetime(series, errors="coerce", format="mixed")
+    except (ValueError, TypeError):
+        return None
+    return coerced if coerced.notna().mean() > DATETIME_COERCION_RATE else None
+
+
 def classify_column(name: str, series: pd.Series) -> ColumnSpec:
     """Block C. One column, profiled with the fields later blocks actually read."""
     numeric = coerce_numeric(series)
-    values = numeric if numeric is not None else series
+    # Dates are only considered once numeric parsing has failed, or a bare year
+    # column would be read as a timestamp.
+    stamps = coerce_datetime(series) if numeric is None else None
+    values = numeric if numeric is not None else (stamps if stamps is not None else series)
     unique = int(values.nunique(dropna=False))
     ratio = unique / max(len(values), 1)
 
-    if pd.api.types.is_datetime64_any_dtype(series):
+    # Identity is checked before type. A row counter parses as a number, so testing
+    # numeric first would let it through as a feature; a continuous float is also
+    # near-unique but is a measurement, which is why floats are exempt.
+    near_unique = ratio > ID_UNIQUE_RATIO and not pd.api.types.is_float_dtype(values)
+
+    if stamps is not None:
         role: Any = "datetime"
+    elif near_unique:
+        role = "id"
     elif numeric is not None:
         role = "numeric"
-    elif ratio > ID_UNIQUE_RATIO:
-        role = "id"
     else:
         role = "categorical"
 
@@ -242,8 +277,14 @@ def _single_column_power(series: pd.Series, target: pd.Series, task: Task) -> fl
     x = values.fillna(values.median() if values.notna().any() else 0).to_numpy().reshape(-1, 1)
 
     if task == "regression":
-        tree = DecisionTreeRegressor(max_depth=2, random_state=0).fit(x, target)
-        return float(max(0.0, tree.score(x, target)))
+        tree = DecisionTreeRegressor(
+            max_depth=REGRESSION_TREE_DEPTH, random_state=0
+        ).fit(x, target)
+        explained = float(max(0.0, tree.score(x, target)))
+        # A column that is a linear component of the target beats any shallow tree,
+        # so take whichever reading is stronger.
+        linear = float(abs(pd.Series(x.ravel()).corr(target.reset_index(drop=True))) ** 2)
+        return max(explained, 0.0 if linear != linear else linear)
     tree = DecisionTreeClassifier(max_depth=2, random_state=0).fit(x, target)
     proba = tree.predict_proba(x)
     if proba.shape[1] < 2:
@@ -308,12 +349,15 @@ def block_d_leakage(
             )
             continue
 
-        if spec.missing_rate < 1.0:
+        if spec.missing_rate < 1.0 and spec.role in ("numeric", "categorical"):
             power = _single_column_power(series, target, task)
-            if power > SINGLE_COLUMN_ALARM:
+            alarm = REGRESSION_POWER_ALARM if task == "regression" else SINGLE_COLUMN_ALARM
+            if power > alarm:
+                unit = "R2" if task == "regression" else "AUC"
                 flags.append(
                     LeakageFlag(name, "single_column_power", Severity.WARN, power,
-                                f"alone reaches {power:.3f}; verify it exists at prediction time")
+                                f"alone reaches {unit} {power:.3f}; "
+                                "verify it exists at prediction time")
                 )
 
         if task != "regression" and spec.role == "categorical":
@@ -358,7 +402,10 @@ def _has_fractional_values(series: pd.Series) -> bool:
 
 
 def block_e_structure(
-    frame: pd.DataFrame, task: Task, schema: Mapping[str, ColumnSpec]
+    frame: pd.DataFrame,
+    task: Task,
+    schema: Mapping[str, ColumnSpec],
+    total_rows: int | None = None,
 ) -> Structure:
     """Block E. Choose a resampling scheme, but never silently.
 
@@ -368,17 +415,23 @@ def block_e_structure(
     datetimes = tuple(n for n, s in schema.items() if s.role == "datetime")
     ordered = False
     if datetimes:
-        column = frame[datetimes[0]].dropna()
+        parsed = coerce_datetime(frame[datetimes[0]])
+        column = (parsed if parsed is not None else frame[datetimes[0]]).dropna()
         ordered = bool(column.is_monotonic_increasing) and len(column) > 1
 
     # A key has many distinct values while repeating; a measurement binned into
     # levels has few. The n^0.6 threshold sits between the two, but the separation
     # is not reliable enough to act on without asking.
-    floor = frame.shape[0] ** 0.6
+    #
+    # The threshold scales with the whole dataset, not the exploration slice. Taking
+    # it from the slice would lower the bar sixfold and flag ordinary discretised
+    # measurements as keys.
+    floor = (total_rows or frame.shape[0]) ** 0.6
     groups = tuple(
         name
         for name, spec in schema.items()
-        if spec.unique_ratio < GROUP_REPEAT_RATIO
+        if spec.role != "datetime"
+        and spec.unique_ratio < GROUP_REPEAT_RATIO
         and spec.cardinality > floor
         and not _has_fractional_values(frame[name])
     )
@@ -463,7 +516,7 @@ def run_eda(
             )
         )
     leakage = tuple(leakage)
-    structure = block_e_structure(sample, task, schema)
+    structure = block_e_structure(sample, task, schema, total_rows=len(frame))
 
     excluded = tuple(sorted(
         {f.column for f in leakage if f.severity is Severity.BLOCK and f.column != "<rows>"}

@@ -111,7 +111,7 @@ def main() -> None:
         tune=not args.no_tune,
     )
 
-    metrics = ("pr_auc", "roc_auc", "brier", "logloss")
+    metrics = (contract.primary_metric, *contract.secondary_metrics)
     header = f"{'tier':<12}{'id':<7}" + "".join(f"{m:>10}" for m in metrics) + f"{'sec':>8}"
     print("\n" + header)
     for experiment in outcome.experiments:

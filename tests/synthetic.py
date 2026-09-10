@@ -25,6 +25,7 @@ class SyntheticCase:
     target: str
     task: Task
     expects_validation: str
+    expects_group_candidate: str | None = None
     expects_group_column: str | None = None
     expects_time_column: str | None = None
     expects_underpowered: bool = False
@@ -85,6 +86,7 @@ def make_case(
         target="target",
         task=task,
         expects_validation=str(expectations.get("expects_validation", "stratified_kfold")),
+        expects_group_candidate=expectations.get("expects_group_candidate"),  # type: ignore[arg-type]
         expects_group_column=expectations.get("expects_group_column"),  # type: ignore[arg-type]
         expects_time_column=expectations.get("expects_time_column"),  # type: ignore[arg-type]
         expects_underpowered=bool(expectations.get("expects_underpowered", False)),
@@ -117,11 +119,13 @@ def contract_cases() -> list[SyntheticCase]:
             expects_time_column="event_time",
             seed=6,
         ),
+        # Grouping is surfaced for confirmation rather than assumed, so the default
+        # scheme stands until a human says otherwise.
         make_case(
             name="grouped",
             with_groups=True,
-            expects_validation="group_kfold",
-            expects_group_column="entity_id",
+            expects_validation="stratified_kfold",
+            expects_group_candidate="entity_id",
             seed=7,
         ),
         make_case(name="high_cardinality", cardinality=500, seed=8),

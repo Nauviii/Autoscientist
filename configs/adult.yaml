@@ -1,0 +1,31 @@
+# Binary income classification carrying protected attributes and a sampling weight
+# that looks like an ordinary feature. Neither fact is visible to any screen.
+dataset: data/adult.csv
+target: income
+
+dossier:
+  objective: "Predict whether annual income exceeds fifty thousand dollars from census attributes."
+  prediction_time: "At survey time, from attributes recorded in the same interview."
+  grain: "One row per surveyed person."
+  columns:
+    fnlwgt: "Census sampling weight. A property of the survey design, not of the person."
+    education: "Highest education level, as a label."
+    education_num: "The same education level encoded ordinally."
+    race: "Self-reported race."
+    sex: "Self-reported sex."
+  notes: >
+    education and education_num carry one fact twice; the association screen should
+    report the pair. fnlwgt cannot be detected statistically and is excluded here.
+  exclude: [fnlwgt]
+  protected: [race, sex, native_country, age]
+  protected_policy: audit
+
+evaluation:
+  primary_metric: pr_auc
+  delta_practical: 0.01
+  secondary_gates:
+    brier: 0.01
+  k: 10
+  repeats: 5
+
+seed: 42

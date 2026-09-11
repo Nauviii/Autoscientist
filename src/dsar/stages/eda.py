@@ -32,6 +32,7 @@ from ..core.contracts import (
     Task,
     ValidationSpec,
 )
+from ..core.dossier import Dossier, apply_dossier
 from ..core.statistics import build_power_profile
 
 # A single column that predicts this well is almost always leakage rather than a
@@ -482,8 +483,14 @@ def run_eda(
     exploration_frac: float = 0.15,
     expected_score: float | None = None,
     secondary_gates: Mapping[str, float] | None = None,
+    primary_metric: str | None = None,
+    dossier: Dossier | None = None,
 ) -> tuple[EDAArtifact, DataContract]:
-    """Run every block and assemble the contract the rest of the session inherits."""
+    """Run every block and assemble the contract the rest of the session inherits.
+
+    The dossier is applied last, so stated knowledge overrides what was inferred
+    while the inferred findings it did not mention are kept.
+    """
     digest = dataset_hash(frame)
     raw_target = frame[target_column]
     task = infer_task(raw_target)
@@ -525,7 +532,8 @@ def run_eda(
     ))
     schema = {name: spec for name, spec in schema.items() if name not in excluded}
 
-    primary, family, secondaries = choose_metric(task, distribution)
+    inferred, family, secondaries = choose_metric(task, distribution)
+    primary = primary_metric or inferred
     validation = ValidationSpec(
         kind=structure.recommended,
         k=k,
@@ -583,6 +591,11 @@ def run_eda(
         exploration_frac=exploration_frac,
         seed=seed,
     )
+
+    if dossier is not None:
+        contract = apply_dossier(contract, dossier)
+        schema = contract.schema
+        excluded = contract.excluded_columns
 
     artifact = EDAArtifact(
         dataset_hash=digest,

@@ -1,0 +1,34 @@
+# Regression on an hourly time series. casual and registered sum exactly to the
+# target, which no single-column screen can see, so they are excluded by hand.
+dataset: data/hour.csv
+target: cnt
+
+dossier:
+  objective: "Forecast hourly bike rentals so fleet rebalancing can be scheduled ahead of demand."
+  prediction_time: "Start of each hour, before any rental in that hour has happened."
+  grain: "One row per hour of the calendar."
+  columns:
+    instant: "Row counter. Not a feature."
+    dteday: "Calendar date of the hour."
+    hr: "Hour of day, 0 to 23."
+    casual: "Non-member rentals during the hour. Only known once the hour has passed."
+    registered: "Member rentals during the hour. Only known once the hour has passed."
+    cnt: "Total rentals, exactly casual plus registered."
+    temp: "Normalised temperature."
+    hum: "Normalised humidity."
+  notes: >
+    casual and registered are components of the target rather than predictors of it.
+    Kept in the file so the leakage screen can be checked against a known answer.
+  exclude: [instant, casual, registered]
+  time_column: dteday
+  temporal_confirmed: true
+
+evaluation:
+  primary_metric: r2
+  delta_practical: 0.01
+  secondary_gates:
+    rmse: 2.0
+  k: 10
+  repeats: 1
+
+seed: 42

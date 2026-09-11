@@ -1,0 +1,27 @@
+# Regression on a small, wide, heavily missing table. Roughly 2900 rows against 80
+# columns means delta_min lands high and most experiments should end inconclusive,
+# which is the honest answer rather than a failure.
+dataset: data/AmesHousing.csv
+target: SalePrice
+
+dossier:
+  objective: "Estimate residential sale price to support listing and appraisal decisions."
+  prediction_time: "Before the property is listed, using only recorded property attributes."
+  grain: "One row per property sale."
+  columns:
+    Order: "Row counter. Not a feature."
+    PID: "Parcel identifier assigned by the assessor."
+    Neighborhood: "Named subdivision. High cardinality, a candidate for target encoding."
+    SalePrice: "Sale price in dollars. Right-skewed."
+  notes: >
+    Many columns encode absence as NA rather than as a missing value, for example
+    PoolQC where NA means no pool. Dropping those rows would discard real signal.
+  exclude: [Order, PID]
+
+evaluation:
+  primary_metric: r2
+  delta_practical: 0.01
+  k: 10
+  repeats: 5
+
+seed: 42

@@ -4,7 +4,12 @@ Everything here is deterministic: the pipeline is a single cell we wrote, the fo
 come from the seed, and the verdicts come from the decision rule. Rerunning with the
 same arguments reproduces the numbers exactly.
 
+A config carries the facts no statistic can supply: which columns will not exist at
+prediction time, whether a repeated key groups rows, which attributes are protected.
+Without one the heuristics still run, so the script works either way.
+
 Usage:
+    uv run python scripts/run_baseline.py --config configs/bike.yaml
     uv run python scripts/run_baseline.py data/telco.csv Churn
 """
 
@@ -21,7 +26,9 @@ apply_determinism_env()
 
 import pandas as pd  # noqa: E402
 
+from dsar.adapters.config import load_research_config  # noqa: E402
 from dsar.adapters.sandbox import ForkExecutor, run_gauntlet  # noqa: E402
+from dsar.core.dossier import Dossier  # noqa: E402
 from dsar.core.state import SessionBudget, build_state  # noqa: E402
 from dsar.ports import FoldSpec, ResourceLimits  # noqa: E402
 from dsar.stages.baseline import MINIMAL_PREPARATION, run_baselines  # noqa: E402
@@ -32,8 +39,9 @@ TIER_NAMES = {"E000": "trivial", "E001": "reference", "E002": "tuned"}
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the three baseline anchors.")
-    parser.add_argument("dataset", type=Path)
-    parser.add_argument("target")
+    parser.add_argument("dataset", type=Path, nargs="?")
+    parser.add_argument("target", nargs="?")
+    parser.add_argument("--config", type=Path, help="research config with the dossier")
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
@@ -41,24 +49,47 @@ def main() -> None:
     parser.add_argument("--no-tune", action="store_true")
     args = parser.parse_args()
 
-    if not args.dataset.exists():
-        sys.exit(f"dataset not found: {args.dataset}")
+    if args.config:
+        config = load_research_config(args.config)
+        dataset, target, dossier = config.dataset, config.target, config.dossier
+        evaluation = config.evaluation
+        seed = config.seed
+    elif args.dataset and args.target:
+        config = None
+        dataset, target, dossier = args.dataset, args.target, Dossier()
+        evaluation = None
+        seed = args.seed
+    else:
+        sys.exit("give either --config or a dataset and target")
 
-    raw = pd.read_csv(args.dataset)
-    digest = hashlib.sha256(args.dataset.read_bytes()).hexdigest()[:16]
+    if not dataset.exists():
+        sys.exit(f"dataset not found: {dataset}")
+
+    raw = pd.read_csv(dataset)
+    digest = hashlib.sha256(dataset.read_bytes()).hexdigest()[:16]
 
     artifact, contract = run_eda(
         frame=raw,
-        target_column=args.target,
-        delta_practical=args.delta_practical,
-        k=args.k,
-        repeats=args.repeats,
-        seed=args.seed,
-        secondary_gates={"brier": 0.01},
+        target_column=target,
+        dossier=dossier,
+        primary_metric=evaluation.primary_metric if evaluation else None,
+        delta_practical=evaluation.delta_practical if evaluation else args.delta_practical,
+        secondary_gates=evaluation.secondary_gates if evaluation else {"brier": 0.01},
+        k=evaluation.k if evaluation else args.k,
+        repeats=evaluation.repeats if evaluation else args.repeats,
+        seed=seed,
     )
     x, y = prepared_frame(raw, contract)
 
-    print(f"dataset      {args.dataset.name}  hash={contract.dataset_hash}  file={digest}")
+    if config and not dossier.is_empty:
+        if dossier.objective:
+            print(f"objective    {dossier.objective}")
+        if dossier.prediction_time:
+            print(f"known at     {dossier.prediction_time}")
+        stated = len(dossier.exclude) + len(dossier.protected) + len(dossier.columns)
+        print(f"dossier      {stated} stated facts from {args.config.name}")
+
+    print(f"dataset      {dataset.name}  hash={contract.dataset_hash}  file={digest}")
     print(f"shape        {artifact.integrity.n_rows} rows, {len(contract.schema)} features "
           f"({artifact.integrity.memory_mb:.1f} MB)")
     print(f"task         {contract.task}  primary metric {contract.primary_metric}")
@@ -67,7 +98,7 @@ def main() -> None:
               f"({contract.target_distribution.prevalence:.1%})")
     print(f"validation   {contract.validation.kind}  {args.k}-fold x {args.repeats} = "
           f"{contract.validation.n_fits} fits  [{artifact.structure.reason}]")
-    print(f"delta_min    {contract.delta_min:.4f}  (practical {args.delta_practical:.4f}, "
+    print(f"delta_min    {contract.delta_min:.4f}  (practical {contract.delta_practical:.4f}, "
           f"detectable {contract.power.mde:.4f}, via {contract.power.method})")
     if contract.excluded_columns:
         print(f"excluded     {', '.join(contract.excluded_columns)}")
@@ -141,7 +172,7 @@ def main() -> None:
     if outcome.chosen_params:
         print(f"tuned params {dict(outcome.chosen_params)}")
     print(f"\nheadroom above the trivial floor: "
-          f"{state.reference_score - outcome.by_id['E000'].mean('pr_auc'):+.4f}")
+          f"{state.reference_score - outcome.by_id["E000"].mean(contract.primary_metric):+.4f}")
 
 
 if __name__ == "__main__":

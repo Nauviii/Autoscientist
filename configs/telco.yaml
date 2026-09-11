@@ -1,0 +1,28 @@
+# Binary churn on mixed types. TotalCharges arrives as text with blank cells, which
+# is the case that first exposed the numeric-coercion gap.
+dataset: data/telco.csv
+target: Churn
+
+dossier:
+  objective: "Identify customers likely to cancel next month so retention can reach them first."
+  prediction_time: "Start of a billing month, before that month's churn decision."
+  grain: "One row per customer."
+  columns:
+    customerID: "Account identifier. Unique per row, carries no signal."
+    tenure: "Months the customer has been subscribed."
+    MonthlyCharges: "Amount billed for the current month."
+    TotalCharges: "Cumulative amount billed. Blank for customers with tenure zero."
+    Contract: "Contract term: month-to-month, one year, or two year."
+  exclude: [customerID]
+  protected: [gender, SeniorCitizen, Partner, Dependents]
+  protected_policy: audit
+
+evaluation:
+  primary_metric: pr_auc
+  delta_practical: 0.01
+  secondary_gates:
+    brier: 0.01
+  k: 10
+  repeats: 5
+
+seed: 42

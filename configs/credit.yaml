@@ -1,0 +1,28 @@
+# Binary default prediction at 6.7 percent positive across 150000 rows. The imbalance
+# raises delta_min, and the size tests whether fifty fits stays practical.
+dataset: data/credit.csv
+target: SeriousDlqin2yrs
+
+dossier:
+  objective: "Predict serious delinquency within two years to inform credit limit decisions."
+  prediction_time: "At application, from the applicant's credit history to date."
+  grain: "One row per borrower."
+  columns:
+    MonthlyIncome: "Self-reported monthly income. Missing for roughly a fifth of rows."
+    NumberOfDependents: "Dependents in the household. Occasionally missing."
+    age: "Borrower age in years."
+  notes: >
+    Missingness in MonthlyIncome may itself be informative, so the indicator is worth
+    testing rather than imputing away.
+  protected: [age]
+  protected_policy: audit
+
+evaluation:
+  primary_metric: pr_auc
+  delta_practical: 0.005
+  secondary_gates:
+    brier: 0.005
+  k: 10
+  repeats: 3
+
+seed: 42

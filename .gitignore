@@ -7,3 +7,4 @@ artifacts/
 data/*.csv
 !data/.gitkeep
 .env
+*:Zone.Identifier

@@ -17,6 +17,9 @@ dossier:
     Many columns encode absence as NA rather than as a missing value, for example
     PoolQC where NA means no pool. Dropping those rows would discard real signal.
   exclude: [Order, PID]
+  # Lot Frontage repeats the way a key would, but it is street frontage in feet.
+  # Answering here stops the prompt from reappearing on every run.
+  grouping_confirmed: true
 
 evaluation:
   primary_metric: r2

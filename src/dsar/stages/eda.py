@@ -32,7 +32,7 @@ from ..core.contracts import (
     Task,
     ValidationSpec,
 )
-from ..core.dossier import Dossier, apply_dossier
+from ..core.dossier import Dossier, apply_dossier, settles_grouping
 from ..core.statistics import build_power_profile
 
 # A single column that predicts this well is almost always leakage rather than a
@@ -59,6 +59,12 @@ MULTICLASS_LIMIT = 20
 # Below this, a grouping key repeats often enough that rows within a group cannot
 # be treated as independent.
 GROUP_REPEAT_RATIO = 0.60
+
+# Share of distinct values occurring exactly once. A key repeats nearly all of its
+# values, while a measurement leaves a third or more appearing a single time. The
+# cost of the stricter bound is missing a key whose groups hold only two rows, and
+# such a key leaks little anyway.
+GROUP_SINGLETON_LIMIT = 0.20
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,6 +399,22 @@ def block_d_leakage(
     return tuple(flags)
 
 
+def _singleton_ratio(series: pd.Series) -> float:
+    """Fraction of distinct values seen exactly once."""
+    counts = series.value_counts()
+    return float((counts == 1).mean()) if len(counts) else 1.0
+
+
+def _looks_like_key(series: pd.Series, floor: float) -> bool:
+    """Whether a column repeats the way an identifier does rather than a measurement."""
+    cardinality = series.nunique(dropna=False)
+    if cardinality <= floor or cardinality / max(len(series), 1) >= GROUP_REPEAT_RATIO:
+        return False
+    if _has_fractional_values(series):
+        return False
+    return _singleton_ratio(series) < GROUP_SINGLETON_LIMIT
+
+
 def _has_fractional_values(series: pd.Series) -> bool:
     """True when the column holds real measurements rather than discrete labels."""
     numeric = coerce_numeric(series)
@@ -421,20 +443,19 @@ def block_e_structure(
         ordered = bool(column.is_monotonic_increasing) and len(column) > 1
 
     # A key has many distinct values while repeating; a measurement binned into
-    # levels has few. The n^0.6 threshold sits between the two, but the separation
-    # is not reliable enough to act on without asking.
+    # levels leaves many appearing once. The n^0.6 threshold sits between the two,
+    # but the separation is not reliable enough to act on without asking.
     #
-    # The threshold scales with the whole dataset, not the exploration slice. Taking
-    # it from the slice would lower the bar sixfold and flag ordinary discretised
-    # measurements as keys.
-    floor = (total_rows or frame.shape[0]) ** 0.6
+    # Every statistic here is taken from the whole frame rather than the exploration
+    # slice. On a sixth of the rows a key with a dozen members per group looks like a
+    # column of singletons, which is the opposite of the signal being tested for.
+    floor = len(frame) ** 0.6
     groups = tuple(
         name
         for name, spec in schema.items()
         if spec.role != "datetime"
-        and spec.unique_ratio < GROUP_REPEAT_RATIO
-        and spec.cardinality > floor
-        and not _has_fractional_values(frame[name])
+        and name in frame.columns
+        and _looks_like_key(frame[name], floor)
     )
 
     if ordered:
@@ -523,7 +544,8 @@ def run_eda(
             )
         )
     leakage = tuple(leakage)
-    structure = block_e_structure(sample, task, schema, total_rows=len(frame))
+    # The full frame, not the slice: group structure is a property of every row.
+    structure = block_e_structure(features, task, schema, total_rows=len(frame))
 
     excluded = tuple(sorted(
         {f.column for f in leakage if f.severity is Severity.BLOCK and f.column != "<rows>"}
@@ -560,7 +582,7 @@ def run_eda(
         warnings.append("typical feature-engineering gains fall below what this dataset resolves")
     if integrity.duplicate_rows:
         warnings.append(f"{integrity.duplicate_rows} duplicate rows")
-    if structure.requires_confirmation:
+    if structure.requires_confirmation and not settles_grouping(dossier):
         warnings.append(
             f"possible grouping key ({', '.join(structure.group_candidates[:3])}); "
             "confirm whether rows within a group must stay in the same fold"

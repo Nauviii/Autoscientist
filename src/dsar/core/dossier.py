@@ -78,9 +78,10 @@ class Dossier:
 def resolve_validation(contract: DataContract, dossier: Dossier) -> ValidationSpec:
     """Apply the user's answers to the questions EDA could only guess at.
 
-    A confirmed grouping key switches the scheme; an explicit denial settles it the
-    other way. Both are better than the heuristic, which cannot tell an identifier
-    from a discretised measurement.
+    Naming a column switches the scheme. Setting the matching confirmed flag without
+    naming one is the opposite answer: the user has looked and there is no grouping
+    key, or the rows are not ordered in time. Either is better evidence than the
+    heuristic, which cannot tell an identifier from a discretised measurement.
     """
     validation = contract.validation
 
@@ -92,11 +93,17 @@ def resolve_validation(contract: DataContract, dossier: Dossier) -> ValidationSp
         return replace(
             validation, kind="group_kfold", group_column=dossier.group_column, time_column=None
         )
+    fallback = "kfold" if contract.task == "regression" else "stratified_kfold"
     if dossier.temporal_confirmed and validation.kind == "time_series":
-        # The user says the data is not ordered in time after all.
-        fallback = "kfold" if contract.task == "regression" else "stratified_kfold"
         return replace(validation, kind=fallback, time_column=None)  # type: ignore[arg-type]
+    if dossier.grouping_confirmed and validation.kind == "group_kfold":
+        return replace(validation, kind=fallback, group_column=None)  # type: ignore[arg-type]
     return validation
+
+
+def settles_grouping(dossier: Dossier | None) -> bool:
+    """Whether the user has already answered the grouping question, either way."""
+    return dossier is not None and bool(dossier.group_column or dossier.grouping_confirmed)
 
 
 def apply_dossier(contract: DataContract, dossier: Dossier) -> DataContract:

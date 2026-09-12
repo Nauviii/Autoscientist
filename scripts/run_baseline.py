@@ -28,6 +28,7 @@ import pandas as pd  # noqa: E402
 
 from dsar.adapters.config import load_research_config  # noqa: E402
 from dsar.adapters.sandbox import ForkExecutor, run_gauntlet  # noqa: E402
+from dsar.core.contracts import ExperimentStatus  # noqa: E402
 from dsar.core.dossier import Dossier  # noqa: E402
 from dsar.core.state import SessionBudget, build_state  # noqa: E402
 from dsar.ports import FoldSpec, ResourceLimits  # noqa: E402
@@ -143,12 +144,27 @@ def main() -> None:
     )
 
     metrics = (contract.primary_metric, *contract.secondary_metrics)
-    header = f"{'tier':<12}{'id':<7}" + "".join(f"{m:>10}" for m in metrics) + f"{'sec':>8}"
-    print("\n" + header)
-    for experiment in outcome.experiments:
-        row = f"{TIER_NAMES.get(experiment.experiment_id, '?'):<12}{experiment.experiment_id:<7}"
-        row += "".join(f"{experiment.mean(m):>10.4f}" for m in metrics)
-        print(row + f"{experiment.runtime_s:>8.1f}")
+    rows = [
+        (
+            TIER_NAMES.get(experiment.experiment_id, "?"),
+            experiment.experiment_id,
+            *(f"{experiment.mean(m):,.4f}" for m in metrics),
+            f"{experiment.runtime_s:.1f}",
+            "" if experiment.status is ExperimentStatus.COMPLETED else experiment.status.value,
+        )
+        for experiment in outcome.experiments
+    ]
+    headers = ("tier", "id", *metrics, "sec", "")
+    # Widths follow the content: an RMSE in dollars runs to six figures and would
+    # otherwise collide with the column beside it.
+    widths = [
+        max(len(str(header)), *(len(row[i]) for row in rows)) + 2
+        for i, header in enumerate(headers)
+    ]
+    print()
+    print("".join(h.ljust(w) if i < 2 else h.rjust(w) for i, (h, w) in enumerate(zip(headers, widths))))
+    for row in rows:
+        print("".join(c.ljust(w) if i < 2 else c.rjust(w) for i, (c, w) in enumerate(zip(row, widths))))
 
     print(f"\n{'evidence':<14}{'delta':>9}  {'interval':<22}{'verdict'}")
     for evidence in outcome.evidences:

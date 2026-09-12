@@ -321,3 +321,69 @@ def test_a_component_of_a_continuous_target_is_flagged() -> None:
     artifact, _ = run_eda(frame=frame, target_column="target")
     flagged = {f.column for f in artifact.leakage if f.test == "single_column_power"}
     assert "major_part" in flagged
+
+
+def test_key_detection_reads_the_whole_frame_not_the_slice() -> None:
+    """On a sixth of the rows a key with a dozen members looks like singletons.
+
+    Computing the signal from the exploration slice would invert it, which is how
+    this went unnoticed until a real dataset surfaced it.
+    """
+    from dsar.stages.eda import GROUP_SINGLETON_LIMIT, _singleton_ratio
+
+    rng = np.random.default_rng(11)
+    entity = pd.Series(rng.integers(0, 200, 2500).astype(str))
+    slice_of_it = entity.iloc[rng.choice(2500, 375, replace=False)]
+
+    assert _singleton_ratio(entity) < GROUP_SINGLETON_LIMIT
+    assert _singleton_ratio(slice_of_it) > GROUP_SINGLETON_LIMIT
+
+
+def test_area_measurements_are_not_mistaken_for_keys() -> None:
+    """Square footage repeats and is integral, but leaves most values singletons."""
+    from dsar.stages.eda import _looks_like_key
+
+    rng = np.random.default_rng(12)
+    n = 2930
+    floor = n ** 0.6
+
+    area = pd.Series(np.where(rng.random(n) < 0.6, 0, rng.integers(16, 1600, n)))
+    finished = pd.Series(rng.integers(0, 1500, n))
+    entity = pd.Series(rng.integers(0, n // 12, n))
+
+    assert not _looks_like_key(area, floor)
+    assert not _looks_like_key(finished, floor)
+    assert _looks_like_key(entity, floor)
+
+
+def test_a_settled_grouping_question_is_not_asked_again() -> None:
+    """Answering in the config should stop the prompt reappearing on every run."""
+    from dsar.core.dossier import Dossier
+
+    rng = np.random.default_rng(13)
+    frame, signal = base_frame(seed=13)
+    frame["entity"] = rng.integers(0, 200, len(frame)).astype(str)
+    frame["y"] = (signal > 0).astype(int)
+
+    unanswered, _ = run_eda(frame=frame, target_column="y")
+    assert any("grouping key" in w for w in unanswered.warnings)
+
+    answered, _ = run_eda(
+        frame=frame, target_column="y", dossier=Dossier(grouping_confirmed=True)
+    )
+    assert not any("grouping key" in w for w in answered.warnings)
+
+
+def test_naming_a_group_column_switches_the_scheme() -> None:
+    from dsar.core.dossier import Dossier
+
+    rng = np.random.default_rng(14)
+    frame, signal = base_frame(seed=14)
+    frame["entity"] = rng.integers(0, 200, len(frame)).astype(str)
+    frame["y"] = (signal > 0).astype(int)
+
+    _, contract = run_eda(
+        frame=frame, target_column="y", dossier=Dossier(group_column="entity")
+    )
+    assert contract.validation.kind == "group_kfold"
+    assert contract.validation.group_column == "entity"

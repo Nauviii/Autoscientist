@@ -15,7 +15,7 @@ measuring it up front keeps later comparisons from taking credit for it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -330,8 +330,16 @@ def run_baselines(
             slot_id="hyperparameter_tuning",
             parent_id=REFERENCE_ID,
         )
-        experiments.append(tuned)
+        # The search may land on the configuration the reference already uses. Comparing
+        # a run against itself yields a zero-width interval and a verdict that reads as
+        # a finding, so it is reported as what it is: no change was tried.
+        if tuned.fingerprint == reference.fingerprint:
+            tuned = replace(tuned, status=ExperimentStatus.DUPLICATE)
+            experiments.append(tuned)
+            return _finish(experiments, evidences, reference, trivial, contract,
+                           REFERENCE_ID, 0.0, chosen)
 
+        experiments.append(tuned)
         verdict = decide(tuned.fold_scores, reference.fold_scores, contract)
         evidences.append(
             build_evidence(
@@ -348,6 +356,21 @@ def run_baselines(
         if verdict.status.value == "supported":
             incumbent_id = TUNED_ID
 
+    return _finish(experiments, evidences, reference, trivial, contract,
+                   incumbent_id, tuning_gain, chosen)
+
+
+def _finish(
+    experiments: list[ExperimentResult],
+    evidences: list[Evidence],
+    reference: ExperimentResult,
+    trivial: ExperimentResult,
+    contract: DataContract,
+    incumbent_id: str,
+    tuning_gain: float,
+    chosen: Mapping[str, Any],
+) -> BaselineOutcome:
+    """Record the lift over the floor and assemble the outcome."""
     lift = decide(reference.fold_scores, trivial.fold_scores, contract)
     evidences.append(
         build_evidence(

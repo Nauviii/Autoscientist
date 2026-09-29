@@ -215,6 +215,48 @@ def coerce_numeric(series: pd.Series) -> pd.Series | None:
     return coerced if coerced.notna().mean() > NUMERIC_COERCION_RATE else None
 
 
+# Decoration a number can wear in a real file: a short symbol or label around digits
+# that carry a separator. Requiring the separator is what keeps a zero-padded key
+# like K000006 out, since an identifier has no decimal or thousands mark.
+_DECORATED_NUMBER = r"^\s*[^\d\-+]{0,3}[-+]?\d+(?:[.,]\d+)+\s*[^\d]{0,3}$"
+
+
+def normalise_text(series: pd.Series) -> pd.Series:
+    """Trim surrounding whitespace, which is never meaningful and always inflates.
+
+    A column holding "Jakarta" and "Jakarta " reports twice the cardinality it has,
+    which then reaches every downstream heuristic that reads cardinality.
+    """
+    if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
+        return series
+    return series.astype("string").str.strip().replace({"": None})
+
+
+def looks_decorated(series: pd.Series) -> bool:
+    """Whether a text column looks like numbers wearing symbols or separators.
+
+    Reported rather than parsed. "1,234" is a thousand in one convention and one
+    point two in another, and the file cannot say which; that reading is a judgement
+    about the source, not a fact about the characters.
+    """
+    if pd.api.types.is_numeric_dtype(series):
+        return False
+    text = series.astype("string").dropna()
+    if text.empty or coerce_numeric(series) is not None:
+        return False
+    return bool(text.str.fullmatch(_DECORATED_NUMBER).fillna(False).mean() > 0.9)
+
+
+def has_case_variants(series: pd.Series) -> bool:
+    """Whether values differ only by letter case, as with Ya, ya and YA."""
+    if pd.api.types.is_numeric_dtype(series):
+        return False
+    text = series.astype("string").dropna().str.strip()
+    if text.empty:
+        return False
+    return text.nunique() > text.str.lower().nunique()
+
+
 def coerce_datetime(series: pd.Series) -> pd.Series | None:
     """Return the datetime reading of a text column, or None if it is not one.
 
@@ -235,6 +277,7 @@ def coerce_datetime(series: pd.Series) -> pd.Series | None:
 
 def classify_column(name: str, series: pd.Series) -> ColumnSpec:
     """Block C. One column, profiled with the fields later blocks actually read."""
+    series = normalise_text(series)
     numeric = coerce_numeric(series)
     # Dates are only considered once numeric parsing has failed, or a bare year
     # column would be read as a timestamp.
@@ -246,7 +289,15 @@ def classify_column(name: str, series: pd.Series) -> ColumnSpec:
     # Identity is checked before type. A row counter parses as a number, so testing
     # numeric first would let it through as a feature; a continuous float is also
     # near-unique but is a measurement, which is why floats are exempt.
-    near_unique = ratio > ID_UNIQUE_RATIO and not pd.api.types.is_float_dtype(values)
+    #
+    # A price written as Rp1,234 is near-unique too, and calling it an identifier
+    # would drop a real feature without saying so. It stays categorical, where the
+    # decoration warning can reach it.
+    near_unique = (
+        ratio > ID_UNIQUE_RATIO
+        and not pd.api.types.is_float_dtype(values)
+        and not looks_decorated(values)
+    )
 
     if stamps is not None:
         role: Any = "datetime"
@@ -594,6 +645,20 @@ def run_eda(
         for spec in schema.values()
     ):
         warnings.append("high-cardinality categoricals present; target encoding is worth testing")
+
+    decorated = [n for n in schema if n in sample.columns and looks_decorated(sample[n])]
+    if decorated:
+        warnings.append(
+            f"numbers wearing symbols or separators in {', '.join(decorated[:3])}; "
+            "the convention cannot be read from the characters alone"
+        )
+
+    case_varied = [n for n in schema if n in sample.columns and has_case_variants(sample[n])]
+    if case_varied:
+        warnings.append(
+            f"values differing only by letter case in {', '.join(case_varied[:3])}; "
+            "confirm whether the case carries meaning"
+        )
 
     contract = DataContract(
         dataset_hash=digest,
